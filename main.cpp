@@ -5,6 +5,10 @@
 #include <sstream>
 #include <iomanip>
 #include <fstream>
+#include <memory>
+#include <functional>
+#include <map>
+#include <vector>
 
 #ifdef _WIN32
     #include <conio.h>
@@ -20,17 +24,107 @@
 using namespace std;
 
 // ============================================
+// Event System for Extensibility
+// ============================================
+
+enum class EventType {
+    FOOD_EATEN,
+    SNAKE_GREW,
+    GAME_OVER,
+    SCORE_CHANGED,
+    HIGH_SCORE_BEATEN
+};
+
+class GameEvent {
+public:
+    EventType type;
+    int value;
+    string message;
+    
+    GameEvent(EventType t, int v = 0, string msg = "") 
+        : type(t), value(v), message(msg) {}
+};
+
+class EventListener {
+public:
+    virtual ~EventListener() = default;
+    virtual void onEvent(const GameEvent& event) = 0;
+};
+
+class EventManager {
+private:
+    map<EventType, vector<EventListener*>> listeners;
+    
+public:
+    void subscribe(EventType type, EventListener* listener) {
+        listeners[type].push_back(listener);
+    }
+    
+    void notify(const GameEvent& event) {
+        auto it = listeners.find(event.type);
+        if (it != listeners.end()) {
+            for (auto* listener : it->second) {
+                listener->onEvent(event);
+            }
+        }
+    }
+};
+
+// ============================================
+// Configuration System
+// ============================================
+
+class GameConfig {
+public:
+    // Board settings
+    int rows;
+    int cols;
+    int startingLength;
+    
+    // Gameplay settings
+    int updateDelay;
+    int pointsPerFood;
+    
+    // Display settings
+    char snakeHeadChar;
+    char snakeBodyChar;
+    char foodChar;
+    char wallChar;
+    char emptyChar;
+    
+    GameConfig() 
+        : rows(20), cols(40), startingLength(3),
+          updateDelay(150), pointsPerFood(10),
+          snakeHeadChar('O'), snakeBodyChar('o'),
+          foodChar('*'), wallChar('#'), emptyChar(' ') {}
+};
+
+// ============================================
 // High Score Manager
 // ============================================
 
-class HighScoreManager {
+class HighScoreManager : public EventListener {
 private:
     const string filename = "game_highest.txt";
     int highScore;
+    EventManager* eventManager;
     
 public:
-    HighScoreManager() : highScore(0) {
+    HighScoreManager() : highScore(0), eventManager(nullptr) {
         loadHighScore();
+    }
+    
+    void setEventManager(EventManager* em) {
+        eventManager = em;
+        if (eventManager) {
+            eventManager->subscribe(EventType::SCORE_CHANGED, this);
+        }
+    }
+    
+    void onEvent(const GameEvent& event) override {
+        if (event.type == EventType::SCORE_CHANGED) {
+            checkAndSaveHighScore(event.value);
+        }
     }
     
     void loadHighScore() {
@@ -43,14 +137,23 @@ public:
         }
     }
     
-    void saveHighScore(int score) {
+    void checkAndSaveHighScore(int score) {
         if (score > highScore) {
+            int oldHighScore = highScore;
             highScore = score;
-            ofstream file(filename);
-            if (file.is_open()) {
-                file << highScore;
-                file.close();
+            saveHighScore();
+            
+            if (eventManager && oldHighScore > 0) {
+                eventManager->notify(GameEvent(EventType::HIGH_SCORE_BEATEN, score));
             }
+        }
+    }
+    
+    void saveHighScore() {
+        ofstream file(filename);
+        if (file.is_open()) {
+            file << highScore;
+            file.close();
         }
     }
     
@@ -80,11 +183,8 @@ public:
 #ifdef _WIN32
         system("cls");
 #else
-        // LINUX FIX: Use \033[H\033[J instead of \033[2J\033[1;1H for more reliable clearing
-        // \033[H moves cursor to home, \033[J clears from cursor to end of screen
         cout << "\033[H\033[J";
         cout.flush();
-        // LINUX FIX: Small delay to ensure terminal processes the escape sequence
         this_thread::sleep_for(chrono::milliseconds(10));
 #endif
     }
@@ -95,7 +195,6 @@ public:
         SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), pos);
 #else
         cout << "\033[" << (row + 1) << ";" << (col + 1) << "H";
-        // LINUX FIX: Always flush after cursor positioning to prevent artifacts
         cout.flush();
 #endif
     }
@@ -109,7 +208,6 @@ public:
         SetConsoleCursorInfo(consoleHandle, &info);
 #else
         cout << "\033[?25l";
-        // LINUX FIX: Flush to ensure cursor hide command is processed immediately
         cout.flush();
 #endif
     }
@@ -123,7 +221,6 @@ public:
         SetConsoleCursorInfo(consoleHandle, &info);
 #else
         cout << "\033[?25h";
-        // LINUX FIX: Flush to ensure cursor show command is processed immediately
         cout.flush();
 #endif
     }
@@ -181,99 +278,101 @@ public:
 };
 
 // ============================================
-// Game Renderer
+// Game Renderer with Config Support
 // ============================================
 
 class GameRenderer {
 private:
     TerminalController& terminal;
     HighScoreManager& highScoreManager;
-    int headerRows = 6;
-    int footerRows = 2;
+    const GameConfig& config;
+    int headerRows;
+    int footerRows;
     
 public:
-    GameRenderer(TerminalController& term, HighScoreManager& hsm) 
-        : terminal(term), highScoreManager(hsm) {}
+    GameRenderer(TerminalController& term, HighScoreManager& hsm, const GameConfig& cfg) 
+        : terminal(term), highScoreManager(hsm), config(cfg),
+          headerRows(6), footerRows(2) {}
     
     void drawFullScreen(const SnakeGameLogic& game, bool showInstructions = false) {
-    auto state = game.getGameState();
-    
-    ostringstream buffer;
-    
-    // Title
-    buffer << "\n";
-    buffer << "  +===============================+\n";
-    buffer << "  |       SNAKE GAME              |\n";
-    buffer << "  +===============================+\n\n";
-    
-    // REMOVED: Do NOT add score line here - it's handled separately by updateGameBoard()
-    
-    // Game board
-    buffer << "+";
-    for (int i = 0; i < state->cols; i++) buffer << "-";
-    buffer << "+\n";
-    
-    for (int r = 0; r < state->rows; r++) {
-        buffer << "|";
-        for (int c = 0; c < state->cols; c++) {
-            buffer << " ";
+        auto state = game.getGameState();
+        
+        ostringstream buffer;
+        
+        // Title
+        buffer << "\n";
+        buffer << "  +===============================+\n";
+        buffer << "  |       SNAKE GAME              |\n";
+        buffer << "  +===============================+\n\n";
+        
+        // Game board
+        buffer << "+";
+        for (int i = 0; i < state->cols; i++) buffer << "-";
+        buffer << "+\n";
+        
+        for (int r = 0; r < state->rows; r++) {
+            buffer << "|";
+            for (int c = 0; c < state->cols; c++) {
+                buffer << " ";
+            }
+            buffer << "|\n";
         }
-        buffer << "|\n";
+        
+        buffer << "+";
+        for (int i = 0; i < state->cols; i++) buffer << "-";
+        buffer << "+\n";
+        
+        // Controls section
+        buffer << "\n";
+        if (showInstructions) {
+            buffer << "  +===================================+\n";
+            buffer << "  |  CONTROLS:                        |\n";
+            buffer << "  |                                   |\n";
+            buffer << "  |  W or UP Arrow    - Move UP       |\n";
+            buffer << "  |  S or DOWN Arrow  - Move DOWN     |\n";
+            buffer << "  |  A or LEFT Arrow  - Move LEFT     |\n";
+            buffer << "  |  D or RIGHT Arrow - Move RIGHT    |\n";
+            buffer << "  |  Q                - Quit Game     |\n";
+            buffer << "  |                                   |\n";
+            buffer << "  |  Press ENTER to start...          |\n";
+            buffer << "  +===================================+\n";
+        } else {
+            buffer << "  Controls: Arrow Keys or WASD  |  Q: Quit\n";
+        }
+        
+        terminal.clearScreen();
+        terminal.hideCursor();
+        cout << buffer.str();
+        cout.flush();
+        
+        // Output the score after the static board
+        terminal.setCursorPosition(4, 0);
+        ostringstream scoreBuffer;
+        scoreBuffer << "  Score: " << setw(4) << state->score 
+                    << "  |  Length: " << setw(3) << state->snakeLength 
+                    << "  |  High Score: " << setw(4) << highScoreManager.getHighScore();
+        scoreBuffer << "  ";
+        
+        cout << scoreBuffer.str();
+        cout.flush();
     }
-    
-    buffer << "+";
-    for (int i = 0; i < state->cols; i++) buffer << "-";
-    buffer << "+\n";
-    
-    // Controls section
-    buffer << "\n";
-    if (showInstructions) {
-        buffer << "  +===================================+\n";
-        buffer << "  |  CONTROLS:                        |\n";
-        buffer << "  |                                   |\n";
-        buffer << "  |  W or UP Arrow    - Move UP       |\n";
-        buffer << "  |  S or DOWN Arrow  - Move DOWN     |\n";
-        buffer << "  |  A or LEFT Arrow  - Move LEFT     |\n";
-        buffer << "  |  D or RIGHT Arrow - Move RIGHT    |\n";
-        buffer << "  |  Q                - Quit Game     |\n";
-        buffer << "  |                                   |\n";
-        buffer << "  |  Press any key to start...        |\n";
-        buffer << "  +===================================+\n";
-    } else {
-        buffer << "  Controls: Arrow Keys or WASD  |  Q: Quit\n";
-    }
-    
-    terminal.clearScreen();
-    terminal.hideCursor();
-    cout << buffer.str();
-    cout.flush();
-    
-    // NOW output the score after the static board
-    terminal.setCursorPosition(4, 0);
-    ostringstream scoreBuffer;
-    scoreBuffer << "  Score: " << setw(4) << state->score 
-                << "  |  Length: " << setw(3) << state->snakeLength 
-                << "  |  High Score: " << setw(4) << highScoreManager.getHighScore() << "  ";
-    cout << scoreBuffer.str();
-    cout.flush();
-}
-
     
     void updateGameBoard(const SnakeGameLogic& game) {
         auto state = game.getGameState();
         
-        // LINUX FIX: Build score line in buffer first, then output atomically
+        // Build score line
         ostringstream scoreBuffer;
         scoreBuffer << "  Score: " << setw(4) << state->score 
                     << "  |  Length: " << setw(3) << state->snakeLength 
-                    << "  |  High Score: " << setw(4) << highScoreManager.getHighScore() << "  ";
+                    << "  |  High Score: " << setw(4) << highScoreManager.getHighScore();
+        scoreBuffer << "  ";
         
         // Update score
         terminal.setCursorPosition(4, 0);
         cout << scoreBuffer.str();
         cout.flush();
         
-        // LINUX FIX: Build each row in a buffer before outputting to reduce flicker
+        // Build and render each row
         for (int r = 0; r < state->rows; r++) {
             ostringstream rowBuffer;
             terminal.setCursorPosition(headerRows + r, 1);
@@ -283,40 +382,36 @@ public:
                 
                 switch(cellType) {
                     case 0: // EMPTY
-                        rowBuffer << " ";
+                        rowBuffer << config.emptyChar;
                         break;
                     case 1: // SNAKE
                         if (r == state->snake.front().first && 
                             c == state->snake.front().second) {
-                            rowBuffer << "O"; // Head
+                            rowBuffer << config.snakeHeadChar;
                         } else {
-                            rowBuffer << "o"; // Body
+                            rowBuffer << config.snakeBodyChar;
                         }
                         break;
                     case 2: // FOOD
-                        rowBuffer << "*";
+                        rowBuffer << config.foodChar;
                         break;
                     case 3: // WALL
-                        rowBuffer << "#";
+                        rowBuffer << config.wallChar;
                         break;
                     default:
-                        rowBuffer << " ";
+                        rowBuffer << config.emptyChar;
                 }
             }
             
-            // LINUX FIX: Output entire row at once
             cout << rowBuffer.str();
         }
         
-        // LINUX FIX: Single flush after all updates
         cout.flush();
     }
     
     void showGameOver(const SnakeGameLogic& game) {
         auto state = game.getGameState();
-        highScoreManager.saveHighScore(state->score);
         
-        // LINUX FIX: Build game over message in buffer for atomic output
         ostringstream buffer;
         buffer << "\n";
         buffer << "  +===============================+\n";
@@ -367,9 +462,8 @@ public:
         char key = getKey();
         if (key == 0) return 0;
         
-        // Handle arrow keys (platform-specific)
 #ifdef _WIN32
-        if (key == -32 || key == 0) { // Arrow key prefix on Windows
+        if (key == -32 || key == 0) {
             key = terminal.getch();
             switch(key) {
                 case 72: game.setDirection(SnakeGameLogic::getDirectionUp()); break;
@@ -380,11 +474,10 @@ public:
             return 0;
         }
 #else
-        if (key == 27) { // Escape sequence start
+        if (key == 27) {
             buffer[0] = key;
             bufferPos = 1;
             
-            // LINUX FIX: Increased timeout to 20ms for more reliable arrow key detection
             auto startTime = chrono::steady_clock::now();
             while (bufferPos < 3 && chrono::duration_cast<chrono::milliseconds>(
                    chrono::steady_clock::now() - startTime).count() < 20) {
@@ -393,7 +486,6 @@ public:
                 }
             }
             
-            // Check if we have a complete arrow key sequence
             if (bufferPos >= 3 && buffer[0] == 27 && buffer[1] == '[') {
                 switch(buffer[2]) {
                     case 'A': game.setDirection(SnakeGameLogic::getDirectionUp()); break;
@@ -403,14 +495,12 @@ public:
                 }
             }
             
-            // Reset buffer
             memset(buffer, 0, sizeof(buffer));
             bufferPos = 0;
             return 0;
         }
 #endif
         
-        // WASD and quit
         switch(key) {
             case 'w': case 'W':
                 game.setDirection(SnakeGameLogic::getDirectionUp());
@@ -441,163 +531,155 @@ public:
 };
 
 // ============================================
-// Main Menu
+// Game Session Manager
 // ============================================
 
-void showIntro(TerminalController& terminal, HighScoreManager& highScoreManager) {
-    // LINUX FIX: Build intro screen in buffer for atomic output
-    ostringstream buffer;
-    buffer << "\n\n\n";
-    buffer << "  #########################################\n";
-    buffer << "  #                                       #\n";
-    buffer << "  #          SNAKE GAME                   #\n";
-    buffer << "  #                                       #\n";
-    buffer << "  #########################################\n\n";
-    buffer << "  High Score: " << highScoreManager.getHighScore() << "\n\n\n";
-    buffer << "  Press ENTER to Start\n";
-    buffer << "  Press Q to Quit\n\n";
-    
-    terminal.clearScreen();
-    cout << buffer.str();
-    cout.flush();
-}
-
-// ============================================
-// Game Loop
-// ============================================
-
-bool runGame(TerminalController& terminal, HighScoreManager& highScoreManager) {
+class GameSession {
+private:
     SnakeGameLogic game;
-    GameRenderer renderer(terminal, highScoreManager);
+    GameConfig config;
+    EventManager eventManager;
+    TerminalController& terminal;
+    HighScoreManager& highScoreManager;
+    GameRenderer renderer;
+    int currentUpdateDelay;
+    int lastScore;
     
-    // Game configuration (single difficulty)
-    int rows = 20;
-    int cols = 40;
-    int updateDelay = 150;
-    int startingLength = 3;
-    int pointsPerFood = 10;
-    
-    game.initializeBoard(
-        rows, 
-        cols, 
-        startingLength, 
-        pointsPerFood,
-        SnakeGameLogic::getDirectionRight()
-    );
-    
-    InputHandler input(terminal, game);
-    
-    // Draw initial screen with instructions
-    renderer.drawFullScreen(game, true);
-    
-    // Wait for any key to start
-    bool keyPressed = false;
-    while (!keyPressed) {
-        if (terminal.kbhit()) {
-            terminal.getch();
-            keyPressed = true;
-        }
-        this_thread::sleep_for(chrono::milliseconds(50));
+public:
+    GameSession(TerminalController& term, HighScoreManager& hsm, const GameConfig& cfg)
+        : config(cfg), terminal(term), highScoreManager(hsm),
+          renderer(term, hsm, config), currentUpdateDelay(cfg.updateDelay),
+          lastScore(0) {
+        
+        // Wire up event system
+        highScoreManager.setEventManager(&eventManager);
     }
     
-    // Clear any remaining buffered input
-    input.clearBuffer();
-    
-    // Redraw without instructions
-    renderer.drawFullScreen(game, false);
-    
-    // LINUX FIX: Small delay after redraw to ensure terminal is ready
-    this_thread::sleep_for(chrono::milliseconds(50));
-    
-    // Game loop
-    auto lastUpdate = chrono::steady_clock::now();
-    bool gameActive = true;
-    
-    while (gameActive) {
-        auto now = chrono::steady_clock::now();
-        auto elapsed = chrono::duration_cast<chrono::milliseconds>(now - lastUpdate).count();
-        
-        // Poll input
-        char key = input.pollInput();
-        if (key == 'Q') {
-            return false; // User wants to quit
-        }
-        
-        // Update game at fixed interval
-        if (elapsed >= updateDelay) {
-            gameActive = game.update();
-            renderer.updateGameBoard(game);
-            lastUpdate = now;
-        }
-        
-        this_thread::sleep_for(chrono::milliseconds(10));
+    void initialize() {
+        game.initializeBoard(
+            config.rows,
+            config.cols,
+            config.startingLength,
+            config.pointsPerFood,
+            SnakeGameLogic::getDirectionRight()
+        );
     }
     
-    // Game over - show the game over screen
-    renderer.showGameOver(game);
-    
-    // Wait for user input (R to replay, Q to quit)
-    while (true) {
-        if (terminal.kbhit()) {
-            char key = terminal.getch();
-            if (key == 'r' || key == 'R') {
-                return true; // Replay
-            } else if (key == 'q' || key == 'Q') {
-                return false; // Quit
-            }
-        }
-        this_thread::sleep_for(chrono::milliseconds(50));
-    }
-}
-
-// ============================================
-// Main
-// ============================================
-
-int main() {
-    TerminalController terminal;
-    HighScoreManager highScoreManager;
-    terminal.enableRawMode();
-    
-    while (true) {
-        showIntro(terminal, highScoreManager);
+    bool run() {
+        InputHandler input(terminal, game);
         
-        // Wait for ENTER or Q
-        bool startGame = false;
-        bool quit = false;
+        // Draw initial screen with instructions
+        renderer.drawFullScreen(game, true);
         
-        while (!startGame && !quit) {
+        // Wait for ENTER key to start
+        bool enterPressed = false;
+        while (!enterPressed) {
             if (terminal.kbhit()) {
                 char key = terminal.getch();
-                if (key == '\n' || key == '\r' || key == ' ') {
-                    startGame = true;
+                if (key == '\n' || key == '\r') {
+                    enterPressed = true;
                 } else if (key == 'q' || key == 'Q') {
-                    quit = true;
+                    return false;
                 }
             }
             this_thread::sleep_for(chrono::milliseconds(50));
         }
         
-        if (quit) {
-            break;
+        input.clearBuffer();
+        renderer.drawFullScreen(game, false);
+        this_thread::sleep_for(chrono::milliseconds(50));
+        
+        // Game loop
+        auto lastUpdate = chrono::steady_clock::now();
+        bool gameActive = true;
+        
+        while (gameActive) {
+            auto now = chrono::steady_clock::now();
+            auto elapsed = chrono::duration_cast<chrono::milliseconds>(now - lastUpdate).count();
+            
+            char key = input.pollInput();
+            if (key == 'Q') {
+                return false;
+            }
+            
+            if (elapsed >= currentUpdateDelay) {
+                gameActive = game.update();
+                
+                // Check for score changes and notify
+                auto state = game.getGameState();
+                if (state->score != lastScore) {
+                    eventManager.notify(GameEvent(EventType::SCORE_CHANGED, state->score));
+                    lastScore = state->score;
+                }
+                
+                renderer.updateGameBoard(game);
+                lastUpdate = now;
+            }
+            
+            this_thread::sleep_for(chrono::milliseconds(10));
         }
         
-        if (startGame) {
-            bool replay = runGame(terminal, highScoreManager);
-            if (!replay) {
-                break; // User chose to quit after game over
+        // Game over
+        highScoreManager.checkAndSaveHighScore(game.getGameState()->score);
+        renderer.showGameOver(game);
+        
+        // Wait for user input
+        while (true) {
+            if (terminal.kbhit()) {
+                char key = terminal.getch();
+                if (key == 'r' || key == 'R') {
+                    return true;
+                } else if (key == 'q' || key == 'Q') {
+                    return false;
+                }
             }
+            this_thread::sleep_for(chrono::milliseconds(50));
         }
     }
+};
+
+// ============================================
+// Main Game Application
+// ============================================
+
+class SnakeGameApp {
+private:
+    TerminalController terminal;
+    HighScoreManager highScoreManager;
+    GameConfig config;
     
-    terminal.clearScreen();
-    terminal.showCursor();
-    // LINUX FIX: Build exit message in buffer
-    ostringstream exitBuffer;
-    exitBuffer << "\n  Thanks for playing!\n\n";
-    cout << exitBuffer.str();
-    cout.flush();
+public:
+    SnakeGameApp() {}
     
+    void run() {
+        terminal.enableRawMode();
+        
+        while (true) {
+            // Create game session
+            GameSession session(terminal, highScoreManager, config);
+            session.initialize();
+            
+            bool replay = session.run();
+            if (!replay) {
+                break;
+            }
+        }
+        
+        terminal.clearScreen();
+        terminal.showCursor();
+        ostringstream exitBuffer;
+        exitBuffer << "\n  Thanks for playing!\n\n";
+        cout << exitBuffer.str();
+        cout.flush();
+    }
+};
+
+// ============================================
+// Main Entry Point
+// ============================================
+
+int main() {
+    SnakeGameApp app;
+    app.run();
     return 0;
 }
-
