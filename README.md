@@ -12,10 +12,6 @@ Follow the install steps below for your OS, then run the compiled binary from a 
 
 ### Game Screenshots
 
-**Start Screen**
-The welcome menu displays your high score and options to begin a new game or exit.
-![Game Start Screen](https://github.com/maitry4/code_crafters/blob/main/Game%20Screenshots/game_start_screen.png)
-
 **Initial Board Display**
 The game board with instructions showing all control options before gameplay begins.
 ![Game Initial Board Display](https://github.com/maitry4/code_crafters/blob/main/Game%20Screenshots/game_initial_board_display.png)
