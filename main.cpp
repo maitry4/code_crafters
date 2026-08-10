@@ -86,8 +86,10 @@ public:
     int pointsPerFood;
     
     // Display settings
-    char snakeHeadChar;
-    char snakeBodyChar;
+    char snake1HeadChar;
+    char snake1BodyChar;
+    char snake2HeadChar;
+    char snake2BodyChar;
     char foodChar;
     char wallChar;
     char emptyChar;
@@ -95,7 +97,8 @@ public:
     GameConfig() 
         : rows(20), cols(40), startingLength(3),
           updateDelay(150), pointsPerFood(10),
-          snakeHeadChar('O'), snakeBodyChar('o'),
+          snake1HeadChar('O'), snake1BodyChar('o'),
+          snake2HeadChar('X'), snake2BodyChar('x'),
           foodChar('*'), wallChar('#'), emptyChar(' ') {}
 };
 
@@ -239,6 +242,13 @@ public:
         originalFlags = fcntl(STDIN_FILENO, F_GETFL, 0);
         fcntl(STDIN_FILENO, F_SETFL, originalFlags | O_NONBLOCK);
 #endif
+#ifdef _WIN32
+        HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+        DWORD dwMode = 0;
+        GetConsoleMode(hOut, &dwMode);
+        dwMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+        SetConsoleMode(hOut, dwMode);
+#endif
     }
     
     void disableRawMode() {
@@ -302,10 +312,10 @@ public:
         // Title
         buffer << "\n";
         buffer << "  +===============================+\n";
-        buffer << "  |       SNAKE GAME              |\n";
+        buffer << "  |    SNAKE GAME MULTIPLAYER     |\n";
         buffer << "  +===============================+\n\n";
         
-        // Game board
+        // Game board outline
         buffer << "+";
         for (int i = 0; i < state->cols; i++) buffer << "-";
         buffer << "+\n";
@@ -325,19 +335,18 @@ public:
         // Controls section
         buffer << "\n";
         if (showInstructions) {
-            buffer << "  +===================================+\n";
-            buffer << "  |  CONTROLS:                        |\n";
-            buffer << "  |                                   |\n";
-            buffer << "  |  W or UP Arrow    - Move UP       |\n";
-            buffer << "  |  S or DOWN Arrow  - Move DOWN     |\n";
-            buffer << "  |  A or LEFT Arrow  - Move LEFT     |\n";
-            buffer << "  |  D or RIGHT Arrow - Move RIGHT    |\n";
-            buffer << "  |  Q                - Quit Game     |\n";
-            buffer << "  |                                   |\n";
-            buffer << "  |  Press ENTER to start...          |\n";
-            buffer << "  +===================================+\n";
+            buffer << "  +=========================================+\n";
+            buffer << "  |  CONTROLS:                              |\n";
+            buffer << "  |                                         |\n";
+            buffer << "  |  P1 (Snake 1)       : W, A, S, D        |\n";
+            buffer << "  |  P2 (Snake 2)       : Arrow Keys        |\n";
+            buffer << "  |  Food (*)           : Get Points & Grow |\n";
+            buffer << "  |  Q                  : Quit Game         |\n";
+            buffer << "  |                                         |\n";
+            buffer << "  |  Press ENTER to start the game...       |\n";
+            buffer << "  +=========================================+\n";
         } else {
-            buffer << "  Controls: Arrow Keys or WASD  |  Q: Quit\n";
+            buffer << "  P1: WASD  |  P2: Arrows  |  Q: Quit\n";
         }
         
         terminal.clearScreen();
@@ -345,14 +354,18 @@ public:
         cout << buffer.str();
         cout.flush();
         
-        // Output the score after the static board
+        if (!showInstructions) {
+            updateScoreBoard(game);
+        }
+    }
+    
+    void updateScoreBoard(const SnakeGameLogic& game) {
+        auto state = game.getGameState();
         terminal.setCursorPosition(4, 0);
         ostringstream scoreBuffer;
-        scoreBuffer << "  Score: " << setw(4) << state->score 
-                    << "  |  Length: " << setw(3) << state->snakeLength 
-                    << "  |  High Score: " << setw(4) << highScoreManager.getHighScore();
-        scoreBuffer << "  ";
-        
+        scoreBuffer << "  P1-Score: " << setw(4) << state->score1 
+                    << "  |  P2-Score: " << setw(4) << state->score2 
+                    << "  |  High: " << setw(4) << highScoreManager.getHighScore() << "  ";
         cout << scoreBuffer.str();
         cout.flush();
     }
@@ -360,17 +373,7 @@ public:
     void updateGameBoard(const SnakeGameLogic& game) {
         auto state = game.getGameState();
         
-        // Build score line
-        ostringstream scoreBuffer;
-        scoreBuffer << "  Score: " << setw(4) << state->score 
-                    << "  |  Length: " << setw(3) << state->snakeLength 
-                    << "  |  High Score: " << setw(4) << highScoreManager.getHighScore();
-        scoreBuffer << "  ";
-        
-        // Update score
-        terminal.setCursorPosition(4, 0);
-        cout << scoreBuffer.str();
-        cout.flush();
+        updateScoreBoard(game);
         
         // Build and render each row
         for (int r = 0; r < state->rows; r++) {
@@ -384,18 +387,24 @@ public:
                     case 0: // EMPTY
                         rowBuffer << config.emptyChar;
                         break;
-                    case 1: // SNAKE
-                        if (r == state->snake.front().first && 
-                            c == state->snake.front().second) {
-                            rowBuffer << config.snakeHeadChar;
+                    case 1: // SNAKE1
+                        if (!state->snake1.empty() && r == state->snake1.front().first && c == state->snake1.front().second) {
+                            rowBuffer << config.snake1HeadChar;
                         } else {
-                            rowBuffer << config.snakeBodyChar;
+                            rowBuffer << config.snake1BodyChar;
                         }
                         break;
-                    case 2: // FOOD
+                    case 2: // SNAKE2
+                        if (!state->snake2.empty() && r == state->snake2.front().first && c == state->snake2.front().second) {
+                            rowBuffer << config.snake2HeadChar;
+                        } else {
+                            rowBuffer << config.snake2BodyChar;
+                        }
+                        break;
+                    case 3: // FOOD
                         rowBuffer << config.foodChar;
                         break;
-                    case 3: // WALL
+                    case 4: // WALL
                         rowBuffer << config.wallChar;
                         break;
                     default:
@@ -414,20 +423,32 @@ public:
         
         ostringstream buffer;
         buffer << "\n";
-        buffer << "  +===============================+\n";
-        buffer << "  |         GAME OVER!            |\n";
-        buffer << "  |   Final Score: " << setw(4) << state->score << "          |\n";
-        buffer << "  |   High Score:  " << setw(4) << highScoreManager.getHighScore() << "          |\n";
+        buffer << "  +=================================+\n";
+        buffer << "  |          GAME OVER!             |\n";
         
-        if (highScoreManager.isNewHighScore(state->score) && state->score > 0) {
-            buffer << "  |                               |\n";
-            buffer << "  |   *** NEW HIGH SCORE! ***     |\n";
+        if (state->winner == 1) {
+            buffer << "  |  PLAYER 1 WINS!                 |\n";
+        } else if (state->winner == 2) {
+            buffer << "  |  PLAYER 2 WINS!                 |\n";
+        } else {
+            buffer << "  |           IT'S A TIE!           |\n";
         }
         
-        buffer << "  |                               |\n";
-        buffer << "  |   Press R to Replay           |\n";
-        buffer << "  |   Press Q to Quit             |\n";
-        buffer << "  +===============================+\n";
+        buffer << "  |                                 |\n";
+        buffer << "  |   P1 Score: " << setw(4) << state->score1 << "                |\n";
+        buffer << "  |   P2 Score: " << setw(4) << state->score2 << "                |\n";
+        buffer << "  |   High Score: " << setw(4) << highScoreManager.getHighScore() << "              |\n";
+        
+        int maxScore = max(state->score1, state->score2);
+        if (highScoreManager.isNewHighScore(maxScore) && maxScore > 0) {
+            buffer << "  |                                 |\n";
+            buffer << "  |     *** NEW HIGH SCORE! ***     |\n";
+        }
+        
+        buffer << "  |                                 |\n";
+        buffer << "  |   Press R to Play Again         |\n";
+        buffer << "  |   Press Q to Quit               |\n";
+        buffer << "  +=================================+\n";
         
         int messageRow = headerRows + state->rows + 3;
         terminal.setCursorPosition(messageRow, 0);
@@ -466,10 +487,10 @@ public:
         if (key == -32 || key == 0) {
             key = terminal.getch();
             switch(key) {
-                case 72: game.setDirection(SnakeGameLogic::getDirectionUp()); break;
-                case 80: game.setDirection(SnakeGameLogic::getDirectionDown()); break;
-                case 75: game.setDirection(SnakeGameLogic::getDirectionLeft()); break;
-                case 77: game.setDirection(SnakeGameLogic::getDirectionRight()); break;
+                case 72: game.setDirection2(SnakeGameLogic::getDirectionUp()); break;
+                case 80: game.setDirection2(SnakeGameLogic::getDirectionDown()); break;
+                case 75: game.setDirection2(SnakeGameLogic::getDirectionLeft()); break;
+                case 77: game.setDirection2(SnakeGameLogic::getDirectionRight()); break;
             }
             return 0;
         }
@@ -488,10 +509,10 @@ public:
             
             if (bufferPos >= 3 && buffer[0] == 27 && buffer[1] == '[') {
                 switch(buffer[2]) {
-                    case 'A': game.setDirection(SnakeGameLogic::getDirectionUp()); break;
-                    case 'B': game.setDirection(SnakeGameLogic::getDirectionDown()); break;
-                    case 'C': game.setDirection(SnakeGameLogic::getDirectionRight()); break;
-                    case 'D': game.setDirection(SnakeGameLogic::getDirectionLeft()); break;
+                    case 'A': game.setDirection2(SnakeGameLogic::getDirectionUp()); break;
+                    case 'B': game.setDirection2(SnakeGameLogic::getDirectionDown()); break;
+                    case 'C': game.setDirection2(SnakeGameLogic::getDirectionRight()); break;
+                    case 'D': game.setDirection2(SnakeGameLogic::getDirectionLeft()); break;
                 }
             }
             
@@ -502,22 +523,12 @@ public:
 #endif
         
         switch(key) {
-            case 'w': case 'W':
-                game.setDirection(SnakeGameLogic::getDirectionUp());
-                return 0;
-            case 's': case 'S':
-                game.setDirection(SnakeGameLogic::getDirectionDown());
-                return 0;
-            case 'a': case 'A':
-                game.setDirection(SnakeGameLogic::getDirectionLeft());
-                return 0;
-            case 'd': case 'D':
-                game.setDirection(SnakeGameLogic::getDirectionRight());
-                return 0;
-            case 'q': case 'Q':
-                return 'Q';
-            default:
-                return 0;
+            case 'w': case 'W': game.setDirection1(SnakeGameLogic::getDirectionUp()); return 0;
+            case 's': case 'S': game.setDirection1(SnakeGameLogic::getDirectionDown()); return 0;
+            case 'a': case 'A': game.setDirection1(SnakeGameLogic::getDirectionLeft()); return 0;
+            case 'd': case 'D': game.setDirection1(SnakeGameLogic::getDirectionRight()); return 0;
+            case 'q': case 'Q': return 'Q';
+            default: return 0;
         }
     }
     
@@ -543,15 +554,15 @@ private:
     HighScoreManager& highScoreManager;
     GameRenderer renderer;
     int currentUpdateDelay;
-    int lastScore;
+    int lastScore1;
+    int lastScore2;
     
 public:
     GameSession(TerminalController& term, HighScoreManager& hsm, const GameConfig& cfg)
         : config(cfg), terminal(term), highScoreManager(hsm),
           renderer(term, hsm, config), currentUpdateDelay(cfg.updateDelay),
-          lastScore(0) {
+          lastScore1(0), lastScore2(0) {
         
-        // Wire up event system
         highScoreManager.setEventManager(&eventManager);
     }
     
@@ -605,11 +616,14 @@ public:
             if (elapsed >= currentUpdateDelay) {
                 gameActive = game.update();
                 
-                // Check for score changes and notify
                 auto state = game.getGameState();
-                if (state->score != lastScore) {
-                    eventManager.notify(GameEvent(EventType::SCORE_CHANGED, state->score));
-                    lastScore = state->score;
+                if (state->score1 != lastScore1) {
+                    eventManager.notify(GameEvent(EventType::SCORE_CHANGED, state->score1));
+                    lastScore1 = state->score1;
+                }
+                if (state->score2 != lastScore2) {
+                    eventManager.notify(GameEvent(EventType::SCORE_CHANGED, state->score2));
+                    lastScore2 = state->score2;
                 }
                 
                 renderer.updateGameBoard(game);
@@ -620,7 +634,7 @@ public:
         }
         
         // Game over
-        highScoreManager.checkAndSaveHighScore(game.getGameState()->score);
+        highScoreManager.checkAndSaveHighScore(max(game.getGameState()->score1, game.getGameState()->score2));
         renderer.showGameOver(game);
         
         // Wait for user input
@@ -655,7 +669,6 @@ public:
         terminal.enableRawMode();
         
         while (true) {
-            // Create game session
             GameSession session(terminal, highScoreManager, config);
             session.initialize();
             
@@ -668,7 +681,7 @@ public:
         terminal.clearScreen();
         terminal.showCursor();
         ostringstream exitBuffer;
-        exitBuffer << "\n  Thanks for playing!\n\n";
+        exitBuffer << "\n  Thanks for playing Multiplayer Snake!\n\n";
         cout << exitBuffer.str();
         cout.flush();
     }
