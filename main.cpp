@@ -88,6 +88,8 @@ public:
     // Display settings
     char snakeHeadChar;
     char snakeBodyChar;
+    char snakeHead2Char;
+    char snakeBody2Char;
     char foodChar;
     char wallChar;
     char emptyChar;
@@ -96,6 +98,7 @@ public:
         : rows(20), cols(40), startingLength(3),
           updateDelay(150), pointsPerFood(10),
           snakeHeadChar('O'), snakeBodyChar('o'),
+          snakeHead2Char('X'), snakeBody2Char('x'),
           foodChar('*'), wallChar('#'), emptyChar(' ') {}
 };
 
@@ -328,16 +331,14 @@ public:
             buffer << "  +===================================+\n";
             buffer << "  |  CONTROLS:                        |\n";
             buffer << "  |                                   |\n";
-            buffer << "  |  W or UP Arrow    - Move UP       |\n";
-            buffer << "  |  S or DOWN Arrow  - Move DOWN     |\n";
-            buffer << "  |  A or LEFT Arrow  - Move LEFT     |\n";
-            buffer << "  |  D or RIGHT Arrow - Move RIGHT    |\n";
-            buffer << "  |  Q                - Quit Game     |\n";
+            buffer << "  |  P1: Arrow Keys (Up/Down/Left/R) |\n";
+            buffer << "  |  P2: W / A / S / D                |\n";
+            buffer << "  |  Q : Quit Game                    |\n";
             buffer << "  |                                   |\n";
             buffer << "  |  Press ENTER to start...          |\n";
             buffer << "  +===================================+\n";
         } else {
-            buffer << "  Controls: Arrow Keys or WASD  |  Q: Quit\n";
+            buffer << "  Controls: P1 (Arrows) | P2 (WASD) | Q: Quit\n";
         }
         
         terminal.clearScreen();
@@ -348,8 +349,8 @@ public:
         // Output the score after the static board
         terminal.setCursorPosition(4, 0);
         ostringstream scoreBuffer;
-        scoreBuffer << "  Score: " << setw(4) << state->score 
-                    << "  |  Length: " << setw(3) << state->snakeLength 
+        scoreBuffer << "  P1 Score: " << setw(4) << state->score 
+                    << "  |  P2 Score: " << setw(4) << state->score2 
                     << "  |  High Score: " << setw(4) << highScoreManager.getHighScore();
         scoreBuffer << "  ";
         
@@ -362,8 +363,8 @@ public:
         
         // Build score line
         ostringstream scoreBuffer;
-        scoreBuffer << "  Score: " << setw(4) << state->score 
-                    << "  |  Length: " << setw(3) << state->snakeLength 
+        scoreBuffer << "  P1 Score: " << setw(4) << state->score 
+                    << "  |  P2 Score: " << setw(4) << state->score2 
                     << "  |  High Score: " << setw(4) << highScoreManager.getHighScore();
         scoreBuffer << "  ";
         
@@ -384,8 +385,8 @@ public:
                     case 0: // EMPTY
                         rowBuffer << config.emptyChar;
                         break;
-                    case 1: // SNAKE
-                        if (r == state->snake.front().first && 
+                    case 1: // SNAKE (Player 1)
+                        if (!state->snake.empty() && r == state->snake.front().first && 
                             c == state->snake.front().second) {
                             rowBuffer << config.snakeHeadChar;
                         } else {
@@ -397,6 +398,14 @@ public:
                         break;
                     case 3: // WALL
                         rowBuffer << config.wallChar;
+                        break;
+                    case 4: // SNAKE2 (Player 2)
+                        if (!state->snake2.empty() && r == state->snake2.front().first && 
+                            c == state->snake2.front().second) {
+                            rowBuffer << config.snakeHead2Char;
+                        } else {
+                            rowBuffer << config.snakeBody2Char;
+                        }
                         break;
                     default:
                         rowBuffer << config.emptyChar;
@@ -416,10 +425,19 @@ public:
         buffer << "\n";
         buffer << "  +===============================+\n";
         buffer << "  |         GAME OVER!            |\n";
-        buffer << "  |   Final Score: " << setw(4) << state->score << "          |\n";
-        buffer << "  |   High Score:  " << setw(4) << highScoreManager.getHighScore() << "          |\n";
+        if (state->losingPlayer == 1) {
+            buffer << "  |   PLAYER 1 LOST!              |\n";
+        } else if (state->losingPlayer == 2) {
+            buffer << "  |   PLAYER 2 LOST!              |\n";
+        } else if (state->losingPlayer == 3) {
+            buffer << "  |   BOTH PLAYERS LOST! (TIE)    |\n";
+        }
+        buffer << "  |   P1 Score: " << setw(4) << state->score << "          |\n";
+        buffer << "  |   P2 Score: " << setw(4) << state->score2 << "          |\n";
+        buffer << "  |   High Score: " << setw(4) << highScoreManager.getHighScore() << "        |\n";
         
-        if (highScoreManager.isNewHighScore(state->score) && state->score > 0) {
+        int maxScore = max(state->score, state->score2);
+        if (highScoreManager.isNewHighScore(maxScore) && maxScore > 0) {
             buffer << "  |                               |\n";
             buffer << "  |   *** NEW HIGH SCORE! ***     |\n";
         }
@@ -466,10 +484,10 @@ public:
         if (key == -32 || key == 0) {
             key = terminal.getch();
             switch(key) {
-                case 72: game.setDirection(SnakeGameLogic::getDirectionUp()); break;
-                case 80: game.setDirection(SnakeGameLogic::getDirectionDown()); break;
-                case 75: game.setDirection(SnakeGameLogic::getDirectionLeft()); break;
-                case 77: game.setDirection(SnakeGameLogic::getDirectionRight()); break;
+                case 72: game.setDirection(SnakeGameLogic::getDirectionUp(), 1); break;
+                case 80: game.setDirection(SnakeGameLogic::getDirectionDown(), 1); break;
+                case 75: game.setDirection(SnakeGameLogic::getDirectionLeft(), 1); break;
+                case 77: game.setDirection(SnakeGameLogic::getDirectionRight(), 1); break;
             }
             return 0;
         }
@@ -488,10 +506,10 @@ public:
             
             if (bufferPos >= 3 && buffer[0] == 27 && buffer[1] == '[') {
                 switch(buffer[2]) {
-                    case 'A': game.setDirection(SnakeGameLogic::getDirectionUp()); break;
-                    case 'B': game.setDirection(SnakeGameLogic::getDirectionDown()); break;
-                    case 'C': game.setDirection(SnakeGameLogic::getDirectionRight()); break;
-                    case 'D': game.setDirection(SnakeGameLogic::getDirectionLeft()); break;
+                    case 'A': game.setDirection(SnakeGameLogic::getDirectionUp(), 1); break;
+                    case 'B': game.setDirection(SnakeGameLogic::getDirectionDown(), 1); break;
+                    case 'C': game.setDirection(SnakeGameLogic::getDirectionRight(), 1); break;
+                    case 'D': game.setDirection(SnakeGameLogic::getDirectionLeft(), 1); break;
                 }
             }
             
@@ -503,16 +521,16 @@ public:
         
         switch(key) {
             case 'w': case 'W':
-                game.setDirection(SnakeGameLogic::getDirectionUp());
+                game.setDirection(SnakeGameLogic::getDirectionUp(), 2);
                 return 0;
             case 's': case 'S':
-                game.setDirection(SnakeGameLogic::getDirectionDown());
+                game.setDirection(SnakeGameLogic::getDirectionDown(), 2);
                 return 0;
             case 'a': case 'A':
-                game.setDirection(SnakeGameLogic::getDirectionLeft());
+                game.setDirection(SnakeGameLogic::getDirectionLeft(), 2);
                 return 0;
             case 'd': case 'D':
-                game.setDirection(SnakeGameLogic::getDirectionRight());
+                game.setDirection(SnakeGameLogic::getDirectionRight(), 2);
                 return 0;
             case 'q': case 'Q':
                 return 'Q';
