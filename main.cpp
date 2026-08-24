@@ -348,8 +348,10 @@ public:
         // Output the score after the static board
         terminal.setCursorPosition(4, 0);
         ostringstream scoreBuffer;
-        scoreBuffer << "  Score: " << setw(4) << state->score 
-                    << "  |  Length: " << setw(3) << state->snakeLength 
+        int primaryScore = !state->players.empty() ? state->players[0].score : 0;
+        int primaryLength = !state->players.empty() ? state->players[0].length : 0;
+        scoreBuffer << "  Score: " << setw(4) << primaryScore 
+                    << "  |  Length: " << setw(3) << primaryLength 
                     << "  |  High Score: " << setw(4) << highScoreManager.getHighScore();
         scoreBuffer << "  ";
         
@@ -362,8 +364,10 @@ public:
         
         // Build score line
         ostringstream scoreBuffer;
-        scoreBuffer << "  Score: " << setw(4) << state->score 
-                    << "  |  Length: " << setw(3) << state->snakeLength 
+        int primaryScore = !state->players.empty() ? state->players[0].score : 0;
+        int primaryLength = !state->players.empty() ? state->players[0].length : 0;
+        scoreBuffer << "  Score: " << setw(4) << primaryScore 
+                    << "  |  Length: " << setw(3) << primaryLength 
                     << "  |  High Score: " << setw(4) << highScoreManager.getHighScore();
         scoreBuffer << "  ";
         
@@ -384,14 +388,21 @@ public:
                     case 0: // EMPTY
                         rowBuffer << config.emptyChar;
                         break;
-                    case 1: // SNAKE
-                        if (r == state->snake.front().first && 
-                            c == state->snake.front().second) {
+                    case 1: { // SNAKE
+                        bool isHead = false;
+                        for (const auto& p : state->players) {
+                            if (!p.body.empty() && r == p.body.front().first && c == p.body.front().second) {
+                                isHead = true;
+                                break;
+                            }
+                        }
+                        if (isHead) {
                             rowBuffer << config.snakeHeadChar;
                         } else {
                             rowBuffer << config.snakeBodyChar;
                         }
                         break;
+                    }
                     case 2: // FOOD
                         rowBuffer << config.foodChar;
                         break;
@@ -411,15 +422,16 @@ public:
     
     void showGameOver(const SnakeGameLogic& game) {
         auto state = game.getGameState();
+        int finalScore = !state->players.empty() ? state->players[0].score : 0;
         
         ostringstream buffer;
         buffer << "\n";
         buffer << "  +===============================+\n";
         buffer << "  |         GAME OVER!            |\n";
-        buffer << "  |   Final Score: " << setw(4) << state->score << "          |\n";
+        buffer << "  |   Final Score: " << setw(4) << finalScore << "          |\n";
         buffer << "  |   High Score:  " << setw(4) << highScoreManager.getHighScore() << "          |\n";
         
-        if (highScoreManager.isNewHighScore(state->score) && state->score > 0) {
+        if (highScoreManager.isNewHighScore(finalScore) && finalScore > 0) {
             buffer << "  |                               |\n";
             buffer << "  |   *** NEW HIGH SCORE! ***     |\n";
         }
@@ -551,7 +563,6 @@ public:
           renderer(term, hsm, config), currentUpdateDelay(cfg.updateDelay),
           lastScore(0) {
         
-        // Wire up event system
         highScoreManager.setEventManager(&eventManager);
     }
     
@@ -607,9 +618,10 @@ public:
                 
                 // Check for score changes and notify
                 auto state = game.getGameState();
-                if (state->score != lastScore) {
-                    eventManager.notify(GameEvent(EventType::SCORE_CHANGED, state->score));
-                    lastScore = state->score;
+                int currentScore = !state->players.empty() ? state->players[0].score : 0;
+                if (currentScore != lastScore) {
+                    eventManager.notify(GameEvent(EventType::SCORE_CHANGED, currentScore));
+                    lastScore = currentScore;
                 }
                 
                 renderer.updateGameBoard(game);
@@ -620,7 +632,9 @@ public:
         }
         
         // Game over
-        highScoreManager.checkAndSaveHighScore(game.getGameState()->score);
+        auto state = game.getGameState();
+        int finalScore = !state->players.empty() ? state->players[0].score : 0;
+        highScoreManager.checkAndSaveHighScore(finalScore);
         renderer.showGameOver(game);
         
         // Wait for user input
@@ -655,7 +669,6 @@ public:
         terminal.enableRawMode();
         
         while (true) {
-            // Create game session
             GameSession session(terminal, highScoreManager, config);
             session.initialize();
             

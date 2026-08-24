@@ -15,35 +15,6 @@
 
 using namespace std;
 
-/**
- * @brief Immutable snapshot of the game state at a specific point in time.
- * 
- * This structure is designed to be thread-safe when accessed through
- * shared_ptr with proper memory ordering. All fields are copied from
- * the game logic state during publishing.
- */
-struct GameState {
-    vector<vector<int>> board;      ///< 2D grid representing the game board
-    int rows;                        ///< Number of rows in the board
-    int cols;                        ///< Number of columns in the board
-    int score;                       ///< Current game score
-    bool gameOver;                   ///< Game over flag
-    pair<int, int> food;            ///< Current food position
-    bool foodExists;                 ///< Whether food is present on the board
-    deque<pair<int, int>> snake;    ///< Snake body segments
-    int snakeLength;                 ///< Current length of the snake
-};
-
-// ============================================================================
-// FORWARD DECLARATIONS
-// ============================================================================
-
-class Board;
-class Snake;
-class FoodManager;
-class CollisionDetector;
-class DirectionController;
-
 // ============================================================================
 // ENUMERATIONS
 // ============================================================================
@@ -70,15 +41,45 @@ enum CellType {
 };
 
 // ============================================================================
+// GAME STATE SNAPSHOT
+// ============================================================================
+
+/**
+ * @brief State snapshot for an individual player/snake entity.
+ */
+struct PlayerState {
+    deque<pair<int, int>> body;
+    int length = 0;
+    int score = 0;
+    bool isAlive = true;
+};
+
+/**
+ * @brief Immutable snapshot of the game state at a specific point in time.
+ * 
+ * This structure is designed to be thread-safe when accessed through
+ * shared_ptr with proper memory ordering. All fields are copied from
+ * the game logic state during publishing.
+ */
+struct GameState {
+    vector<vector<int>> board;      ///< 2D grid representing the game board
+    int rows;                        ///< Number of rows in the board
+    int cols;                        ///< Number of columns in the board
+    vector<PlayerState> players;    ///< Collection of all player/snake entities
+    int score;                       ///< Primary game score (for single-player / backwards compatibility)
+    int snakeLength;                 ///< Primary snake length
+    bool gameOver;                   ///< Game over flag
+    int winner;                      ///< Winning player identifier (0 = none/tie, 1 = P1, 2 = P2)
+    pair<int, int> food;            ///< Current food position
+    bool foodExists;                 ///< Whether food is present on the board
+};
+
+// ============================================================================
 // BOARD MANAGEMENT
 // ============================================================================
 
 /**
  * @brief Manages the game board state and cell operations.
- * 
- * Provides a clean interface for board manipulation including cell access,
- * modification, and initialization. This class encapsulates all board-related
- * logic and provides boundary checking.
  */
 class Board {
 private:
@@ -87,54 +88,27 @@ private:
     int cols;
 
 public:
-    /**
-     * @brief Initializes the board with specified dimensions.
-     * @param rows Number of rows
-     * @param cols Number of columns
-     */
     void initialize(int rows, int cols) {
         this->rows = rows;
         this->cols = cols;
         grid = vector<vector<int>>(rows, vector<int>(cols, EMPTY));
     }
 
-    /**
-     * @brief Checks if a position is within board boundaries.
-     * @param r Row index
-     * @param c Column index
-     * @return True if position is valid, false otherwise
-     */
     bool isInBounds(int r, int c) const {
         return r >= 0 && r < rows && c >= 0 && c < cols;
     }
 
-    /**
-     * @brief Gets the cell type at specified position.
-     * @param r Row index
-     * @param c Column index
-     * @return CellType at the position
-     */
     int getCellType(int r, int c) const {
         if (!isInBounds(r, c)) return WALL;
         return grid[r][c];
     }
 
-    /**
-     * @brief Sets the cell type at specified position.
-     * @param r Row index
-     * @param c Column index
-     * @param cellType Type to set
-     */
     void setCellType(int r, int c, int cellType) {
         if (isInBounds(r, c)) {
             grid[r][c] = cellType;
         }
     }
 
-    /**
-     * @brief Gets all empty cell positions on the board.
-     * @return Vector of empty cell coordinates
-     */
     vector<pair<int, int>> getEmptyCells() const {
         vector<pair<int, int>> emptyCells;
         for (int r = 0; r < rows; r++) {
@@ -158,10 +132,6 @@ public:
 
 /**
  * @brief Manages the snake entity including movement, growth, and collision.
- * 
- * Encapsulates all snake-related behavior including body segment tracking,
- * movement mechanics, and growth logic. Provides a clean interface for
- * snake operations.
  */
 class Snake {
 private:
@@ -171,13 +141,6 @@ private:
 public:
     Snake() : growthPending(0) {}
 
-    /**
-     * @brief Initializes the snake at a starting position.
-     * @param startPos Initial head position
-     * @param length Starting length of the snake
-     * @param direction Initial movement direction
-     * @param board Reference to the game board
-     */
     void initialize(pair<int, int> startPos, int length, Direction direction, Board& board) {
         body.clear();
         growthPending = 0;
@@ -202,11 +165,6 @@ public:
         }
     }
 
-    /**
-     * @brief Moves the snake to a new head position.
-     * @param newHead New head position
-     * @param board Reference to the game board
-     */
     void move(pair<int, int> newHead, Board& board) {
         body.push_front(newHead);
         board.setCellType(newHead.first, newHead.second, SNAKE);
@@ -220,19 +178,10 @@ public:
         }
     }
 
-    /**
-     * @brief Adds growth to the snake.
-     * @param amount Amount of segments to grow
-     */
     void grow(int amount = 1) {
         growthPending += amount;
     }
 
-    /**
-     * @brief Checks if a position collides with the snake body.
-     * @param pos Position to check
-     * @return True if collision detected, false otherwise
-     */
     bool checkSelfCollision(pair<int, int> pos) const {
         for (size_t i = 1; i < body.size(); i++) {
             if (body[i] == pos) return true;
@@ -252,9 +201,6 @@ public:
 
 /**
  * @brief Manages food placement and state on the game board.
- * 
- * Handles random food placement ensuring food appears only on empty cells.
- * Uses a random number generator for unpredictable food positions.
  */
 class FoodManager {
 private:
@@ -263,16 +209,8 @@ private:
     mt19937& rng;
 
 public:
-    /**
-     * @brief Constructs a food manager with a random number generator.
-     * @param rng Reference to random number generator
-     */
     FoodManager(mt19937& rng) : exists(false), rng(rng) {}
 
-    /**
-     * @brief Places food at a random empty location on the board.
-     * @param board Reference to the game board
-     */
     void placeRandom(Board& board) {
         vector<pair<int, int>> emptyCells = board.getEmptyCells();
         
@@ -281,17 +219,13 @@ public:
             return;
         }
         
-        uniform_int_distribution<int> dist(0, emptyCells.size() - 1);
+        uniform_int_distribution<int> dist(0, static_cast<int>(emptyCells.size()) - 1);
         int idx = dist(rng);
         position = emptyCells[idx];
         board.setCellType(position.first, position.second, FOOD);
         exists = true;
     }
 
-    /**
-     * @brief Removes the current food from the board.
-     * @param board Reference to the game board
-     */
     void remove(Board& board) {
         if (exists) {
             board.setCellType(position.first, position.second, EMPTY);
@@ -309,38 +243,17 @@ public:
 
 /**
  * @brief Handles all collision detection logic for the game.
- * 
- * Centralizes collision detection including boundary checks, wall collisions,
- * self-collisions, and food pickup detection.
  */
 class CollisionDetector {
 public:
-    /**
-     * @brief Checks if position is out of bounds.
-     * @param pos Position to check
-     * @param board Reference to the game board
-     * @return True if out of bounds, false otherwise
-     */
     static bool isOutOfBounds(pair<int, int> pos, const Board& board) {
         return !board.isInBounds(pos.first, pos.second);
     }
 
-    /**
-     * @brief Checks if position contains a wall.
-     * @param pos Position to check
-     * @param board Reference to the game board
-     * @return True if wall detected, false otherwise
-     */
     static bool isWall(pair<int, int> pos, const Board& board) {
         return board.getCellType(pos.first, pos.second) == WALL;
     }
 
-    /**
-     * @brief Checks if position matches food location.
-     * @param pos Position to check
-     * @param foodManager Reference to food manager
-     * @return True if food is at position, false otherwise
-     */
     static bool isFood(pair<int, int> pos, const FoodManager& foodManager) {
         return foodManager.isPresent() && pos == foodManager.getPosition();
     }
@@ -352,9 +265,6 @@ public:
 
 /**
  * @brief Manages direction changes with validation.
- * 
- * Ensures direction changes follow game rules (e.g., cannot reverse 180 degrees).
- * Provides thread-safe direction updates through atomic operations.
  */
 class DirectionController {
 private:
@@ -363,15 +273,32 @@ private:
     atomic<int> atomicInput;
 
 public:
-    DirectionController() : current(NONE), next(NONE) {
-        atomicInput.store(static_cast<int>(NONE), memory_order_relaxed);
+    DirectionController() : current(NONE), next(NONE), atomicInput(static_cast<int>(NONE)) {}
+
+    DirectionController(const DirectionController& other)
+        : current(other.current), next(other.next), atomicInput(other.atomicInput.load()) {}
+
+    DirectionController& operator=(const DirectionController& other) {
+        if (this != &other) {
+            current = other.current;
+            next = other.next;
+            atomicInput.store(other.atomicInput.load());
+        }
+        return *this;
     }
 
-    /**
-     * @brief Validates if a direction change is allowed.
-     * @param newDir Proposed new direction
-     * @return True if change is valid, false otherwise
-     */
+    DirectionController(DirectionController&& other) noexcept
+        : current(other.current), next(other.next), atomicInput(other.atomicInput.load()) {}
+
+    DirectionController& operator=(DirectionController&& other) noexcept {
+        if (this != &other) {
+            current = other.current;
+            next = other.next;
+            atomicInput.store(other.atomicInput.load());
+        }
+        return *this;
+    }
+
     bool isValidChange(Direction newDir) const {
         if (current == UP && newDir == DOWN) return false;
         if (current == DOWN && newDir == UP) return false;
@@ -380,17 +307,10 @@ public:
         return true;
     }
 
-    /**
-     * @brief Sets the next direction (thread-safe).
-     * @param dir Direction to set
-     */
     void setInput(Direction dir) {
         atomicInput.store(static_cast<int>(dir), memory_order_release);
     }
 
-    /**
-     * @brief Processes input and updates current direction.
-     */
     void processInput() {
         int dirValue = atomicInput.exchange(static_cast<int>(NONE), memory_order_acquire);
         Direction inputDir = static_cast<Direction>(dirValue);
@@ -402,11 +322,6 @@ public:
         current = next;
     }
 
-    /**
-     * @brief Calculates next position based on current direction.
-     * @param currentPos Current position
-     * @return Next position after move
-     */
     pair<int, int> getNextPosition(pair<int, int> currentPos) const {
         int newRow = currentPos.first;
         int newCol = currentPos.second;
@@ -430,14 +345,31 @@ public:
 };
 
 // ============================================================================
+// SNAKE PLAYER ENTITY (Internal Controller & State)
+// ============================================================================
+
+/**
+ * @brief Aggregates the snake entity, input controller, and gameplay score for one player.
+ */
+struct SnakePlayer {
+    Snake snake;
+    DirectionController directionController;
+    int score = 0;
+    bool isAlive = true;
+
+    SnakePlayer() = default;
+    SnakePlayer(const SnakePlayer&) = default;
+    SnakePlayer& operator=(const SnakePlayer&) = default;
+    SnakePlayer(SnakePlayer&&) noexcept = default;
+    SnakePlayer& operator=(SnakePlayer&&) noexcept = default;
+};
+
+// ============================================================================
 // STATE PUBLISHER
 // ============================================================================
 
 /**
  * @brief Manages thread-safe publishing of game state snapshots.
- * 
- * Uses double buffering and atomic operations to provide lock-free
- * state updates between game logic and rendering threads.
  */
 class StatePublisher {
 private:
@@ -452,35 +384,38 @@ public:
         currentState.store(writeBuffer, memory_order_relaxed);
     }
 
-    /**
-     * @brief Publishes a new game state snapshot.
-     * @param board Game board
-     * @param snake Snake entity
-     * @param foodManager Food manager
-     * @param score Current score
-     * @param gameOver Game over flag
-     */
-    void publish(const Board& board, const Snake& snake, const FoodManager& foodManager, 
-                 int score, bool gameOver) {
+    void publish(const Board& board, const vector<SnakePlayer>& players, 
+                 const FoodManager& foodManager, bool gameOver, int winner) {
         writeBuffer->rows = board.getRows();
         writeBuffer->cols = board.getCols();
-        writeBuffer->score = score;
         writeBuffer->gameOver = gameOver;
+        writeBuffer->winner = winner;
         writeBuffer->food = foodManager.getPosition();
         writeBuffer->foodExists = foodManager.isPresent();
-        writeBuffer->snake = snake.getBody();
-        writeBuffer->snakeLength = snake.getLength();
         writeBuffer->board = board.getGrid();
         
-        // Atomic swap with memory_order_release ensures visibility
+        writeBuffer->players.clear();
+        for (const auto& p : players) {
+            PlayerState ps;
+            ps.body = p.snake.getBody();
+            ps.length = static_cast<int>(p.snake.getLength());
+            ps.score = p.score;
+            ps.isAlive = p.isAlive;
+            writeBuffer->players.push_back(ps);
+        }
+        
+        if (!writeBuffer->players.empty()) {
+            writeBuffer->score = writeBuffer->players[0].score;
+            writeBuffer->snakeLength = writeBuffer->players[0].length;
+        } else {
+            writeBuffer->score = 0;
+            writeBuffer->snakeLength = 0;
+        }
+        
         currentState.store(writeBuffer, memory_order_release);
         swap(writeBuffer, readBuffer);
     }
 
-    /**
-     * @brief Gets the current game state (thread-safe).
-     * @return Shared pointer to immutable game state
-     */
     shared_ptr<const GameState> getState() const {
         return currentState.load(memory_order_acquire);
     }
@@ -491,127 +426,129 @@ public:
 // ============================================================================
 
 /**
- * @brief Main game logic controller coordinating all game systems.
- * 
- * Orchestrates the interaction between Board, Snake, FoodManager, and other
- * components. Manages game loop updates, scoring, and state publishing.
- * Designed for thread-safe operation with separate game and render threads.
+ * @brief Main game logic controller coordinating all entities and components.
  */
 class SnakeGameLogic {
 private:
+    // Single source of truth defining how many snakes/players participate
+    static constexpr size_t NUM_PLAYERS = 1;
+
     Board board;
-    Snake snake;
+    vector<SnakePlayer> players;
     FoodManager foodManager;
-    DirectionController directionController;
     StatePublisher statePublisher;
     
     mt19937 rng;
-    int score;
     int pointsPerFood;
     bool gameOver;
+    int winner;
 
 public:
-    SnakeGameLogic() : foodManager(rng), score(0), pointsPerFood(10), gameOver(false) {
+    SnakeGameLogic() : foodManager(rng), pointsPerFood(10), gameOver(false), winner(0) {
         auto seed = chrono::high_resolution_clock::now().time_since_epoch().count();
         rng.seed(static_cast<unsigned int>(seed));
     }
 
-    /**
-     * @brief Initializes the game with specified parameters.
-     * @param rows Number of board rows
-     * @param cols Number of board columns
-     * @param startingLength Initial snake length
-     * @param pointsPerFood Points awarded per food
-     * @param initialDirection Starting movement direction
-     */
     void initializeBoard(int rows, int cols, int startingLength, 
                         int pointsPerFood, Direction initialDirection) {
         this->pointsPerFood = pointsPerFood;
-        score = 0;
         gameOver = false;
+        winner = 0;
         
         board.initialize(rows, cols);
-        directionController.initialize(initialDirection);
+        players.clear();
+        players.resize(NUM_PLAYERS);
         
-        pair<int, int> startPos = {rows / 2, cols / 2};
-        snake.initialize(startPos, startingLength, initialDirection, board);
+        for (size_t i = 0; i < players.size(); i++) {
+            players[i].score = 0;
+            players[i].isAlive = true;
+            players[i].directionController.initialize(initialDirection);
+            pair<int, int> startPos = {rows / 2, cols / 2};
+            players[i].snake.initialize(startPos, startingLength, initialDirection, board);
+        }
         
         foodManager.placeRandom(board);
-        statePublisher.publish(board, snake, foodManager, score, gameOver);
+        statePublisher.publish(board, players, foodManager, gameOver, winner);
     }
 
-    /**
-     * @brief Sets the snake direction (thread-safe input).
-     * @param newDir Direction to move
-     */
     void setDirection(Direction newDir) {
-        directionController.setInput(newDir);
+        if (!players.empty()) {
+            players[0].directionController.setInput(newDir);
+        }
     }
 
-    /**
-     * @brief Updates the game state by one tick.
-     * @return True if game continues, false if game over
-     */
+    void setDirection(size_t playerIndex, Direction newDir) {
+        if (playerIndex < players.size()) {
+            players[playerIndex].directionController.setInput(newDir);
+        }
+    }
+
     bool update() {
         if (gameOver) {
             return false;
         }
         
-        // Process direction input
-        directionController.processInput();
+        // Advance all active players
+        for (size_t i = 0; i < players.size(); i++) {
+            if (!players[i].isAlive) continue;
+            
+            players[i].directionController.processInput();
+            pair<int, int> newHead = players[i].directionController.getNextPosition(players[i].snake.getHead());
+            
+            // Check boundary & wall collisions
+            if (CollisionDetector::isOutOfBounds(newHead, board) || CollisionDetector::isWall(newHead, board)) {
+                players[i].isAlive = false;
+                continue;
+            }
+            
+            // Check self-collision
+            if (players[i].snake.checkSelfCollision(newHead)) {
+                players[i].isAlive = false;
+                continue;
+            }
+            
+            // Check food pickup
+            if (CollisionDetector::isFood(newHead, foodManager)) {
+                players[i].snake.grow();
+                players[i].score += pointsPerFood;
+                foodManager.remove(board);
+            }
+            
+            // Move snake
+            players[i].snake.move(newHead, board);
+        }
         
-        // Calculate next position
-        pair<int, int> newHead = directionController.getNextPosition(snake.getHead());
+        // Determine active player survival
+        size_t aliveCount = 0;
+        for (const auto& p : players) {
+            if (p.isAlive) aliveCount++;
+        }
         
-        // Check collisions
-        if (CollisionDetector::isOutOfBounds(newHead, board)) {
+        if (aliveCount == 0) {
             gameOver = true;
-            statePublisher.publish(board, snake, foodManager, score, gameOver);
-            return false;
         }
         
-        if (CollisionDetector::isWall(newHead, board)) {
-            gameOver = true;
-            statePublisher.publish(board, snake, foodManager, score, gameOver);
-            return false;
-        }
-        
-        if (snake.checkSelfCollision(newHead)) {
-            gameOver = true;
-            statePublisher.publish(board, snake, foodManager, score, gameOver);
-            return false;
-        }
-        
-        // Handle food collision
-        if (CollisionDetector::isFood(newHead, foodManager)) {
-            snake.grow();
-            score += pointsPerFood;
-            foodManager.remove(board);
-        }
-        
-        // Move snake
-        snake.move(newHead, board);
-        
-        // Place new food if needed
+        // Place new food if consumed
         if (!foodManager.isPresent()) {
             foodManager.placeRandom(board);
         }
         
         // Check win condition (board full)
-        if (!foodManager.isPresent() && !snake.hasPendingGrowth()) {
+        bool hasPending = false;
+        for (const auto& p : players) {
+            if (p.snake.hasPendingGrowth()) {
+                hasPending = true;
+                break;
+            }
+        }
+        if (!foodManager.isPresent() && !hasPending) {
             gameOver = true;
-            statePublisher.publish(board, snake, foodManager, score, gameOver);
-            return false;
         }
         
         // Publish updated state
-        statePublisher.publish(board, snake, foodManager, score, gameOver);
-        return true;
+        statePublisher.publish(board, players, foodManager, gameOver, winner);
+        return !gameOver;
     }
-
-    // ========================================================================
-    // THREAD-SAFE ACCESSORS (for render thread)
-    // ========================================================================
 
     shared_ptr<const GameState> getGameState() const {
         return statePublisher.getState();
@@ -637,30 +574,6 @@ public:
         return state->gameOver;
     }
 
-    int getCellType(int r, int c) const {
-        auto state = statePublisher.getState();
-        if (r >= 0 && r < state->rows && c >= 0 && c < state->cols) {
-            return state->board[r][c];
-        }
-        return WALL;
-    }
-
-    /**
-     * @brief Converts cell type to display character.
-     * @param cellType Type of cell
-     * @return Character representing the cell
-     */
-    char renderSymbol(int cellType) const {
-        switch(cellType) {
-            case EMPTY: return ' ';
-            case SNAKE: return 'O';
-            case FOOD:  return '*';
-            case WALL:  return '#';
-        }
-        return ' ';
-    }
-
-    // Static direction accessors
     static Direction getDirectionUp() { return UP; }
     static Direction getDirectionDown() { return DOWN; }
     static Direction getDirectionLeft() { return LEFT; }
