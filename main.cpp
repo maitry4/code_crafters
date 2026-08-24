@@ -9,6 +9,7 @@
 #include <functional>
 #include <map>
 #include <vector>
+#include <algorithm>
 
 #ifdef _WIN32
     #include <conio.h>
@@ -76,16 +77,12 @@ public:
 
 class GameConfig {
 public:
-    // Board settings
     int rows;
     int cols;
     int startingLength;
-    
-    // Gameplay settings
     int updateDelay;
     int pointsPerFood;
     
-    // Display settings
     char snakeHeadChar;
     char snakeBodyChar;
     char foodChar;
@@ -301,9 +298,9 @@ public:
         
         // Title
         buffer << "\n";
-        buffer << "  +===============================+\n";
-        buffer << "  |       SNAKE GAME              |\n";
-        buffer << "  +===============================+\n\n";
+        buffer << "  +=================================+\n";
+        buffer << "  |     MULTIPLAYER SNAKE GAME      |\n";
+        buffer << "  +=================================+\n\n";
         
         // Game board
         buffer << "+";
@@ -327,17 +324,14 @@ public:
         if (showInstructions) {
             buffer << "  +===================================+\n";
             buffer << "  |  CONTROLS:                        |\n";
-            buffer << "  |                                   |\n";
-            buffer << "  |  W or UP Arrow    - Move UP       |\n";
-            buffer << "  |  S or DOWN Arrow  - Move DOWN     |\n";
-            buffer << "  |  A or LEFT Arrow  - Move LEFT     |\n";
-            buffer << "  |  D or RIGHT Arrow - Move RIGHT    |\n";
-            buffer << "  |  Q                - Quit Game     |\n";
+            buffer << "  |  Player 1: W A S D                |\n";
+            buffer << "  |  Player 2: Arrow Keys             |\n";
+            buffer << "  |  Q       : Quit Game              |\n";
             buffer << "  |                                   |\n";
             buffer << "  |  Press ENTER to start...          |\n";
             buffer << "  +===================================+\n";
         } else {
-            buffer << "  Controls: Arrow Keys or WASD  |  Q: Quit\n";
+            buffer << "  P1: WASD  |  P2: Arrows  |  Q: Quit\n";
         }
         
         terminal.clearScreen();
@@ -345,13 +339,13 @@ public:
         cout << buffer.str();
         cout.flush();
         
-        // Output the score after the static board
+        // Output the score header
         terminal.setCursorPosition(4, 0);
         ostringstream scoreBuffer;
-        int primaryScore = !state->players.empty() ? state->players[0].score : 0;
-        int primaryLength = !state->players.empty() ? state->players[0].length : 0;
-        scoreBuffer << "  Score: " << setw(4) << primaryScore 
-                    << "  |  Length: " << setw(3) << primaryLength 
+        int s1 = state->players.size() > 0 ? state->players[0].score : 0;
+        int s2 = state->players.size() > 1 ? state->players[1].score : 0;
+        scoreBuffer << "  P1 Score: " << setw(4) << s1 
+                    << "  |  P2 Score: " << setw(4) << s2 
                     << "  |  High Score: " << setw(4) << highScoreManager.getHighScore();
         scoreBuffer << "  ";
         
@@ -364,10 +358,10 @@ public:
         
         // Build score line
         ostringstream scoreBuffer;
-        int primaryScore = !state->players.empty() ? state->players[0].score : 0;
-        int primaryLength = !state->players.empty() ? state->players[0].length : 0;
-        scoreBuffer << "  Score: " << setw(4) << primaryScore 
-                    << "  |  Length: " << setw(3) << primaryLength 
+        int s1 = state->players.size() > 0 ? state->players[0].score : 0;
+        int s2 = state->players.size() > 1 ? state->players[1].score : 0;
+        scoreBuffer << "  P1 Score: " << setw(4) << s1 
+                    << "  |  P2 Score: " << setw(4) << s2 
                     << "  |  High Score: " << setw(4) << highScoreManager.getHighScore();
         scoreBuffer << "  ";
         
@@ -422,24 +416,37 @@ public:
     
     void showGameOver(const SnakeGameLogic& game) {
         auto state = game.getGameState();
-        int finalScore = !state->players.empty() ? state->players[0].score : 0;
+        int s1 = state->players.size() > 0 ? state->players[0].score : 0;
+        int s2 = state->players.size() > 1 ? state->players[1].score : 0;
         
         ostringstream buffer;
         buffer << "\n";
-        buffer << "  +===============================+\n";
-        buffer << "  |         GAME OVER!            |\n";
-        buffer << "  |   Final Score: " << setw(4) << finalScore << "          |\n";
-        buffer << "  |   High Score:  " << setw(4) << highScoreManager.getHighScore() << "          |\n";
+        buffer << "  +=================================+\n";
+        buffer << "  |          GAME OVER!             |\n";
         
-        if (highScoreManager.isNewHighScore(finalScore) && finalScore > 0) {
-            buffer << "  |                               |\n";
-            buffer << "  |   *** NEW HIGH SCORE! ***     |\n";
+        if (state->winner == 1) {
+            buffer << "  |        PLAYER 1 WINS!           |\n";
+        } else if (state->winner == 2) {
+            buffer << "  |        PLAYER 2 WINS!           |\n";
+        } else {
+            buffer << "  |           IT'S A TIE!           |\n";
         }
         
-        buffer << "  |                               |\n";
-        buffer << "  |   Press R to Replay           |\n";
-        buffer << "  |   Press Q to Quit             |\n";
-        buffer << "  +===============================+\n";
+        buffer << "  |                                 |\n";
+        buffer << "  |   P1 Score:   " << setw(4) << s1 << "              |\n";
+        buffer << "  |   P2 Score:   " << setw(4) << s2 << "              |\n";
+        buffer << "  |   High Score: " << setw(4) << highScoreManager.getHighScore() << "              |\n";
+        
+        int maxScore = max(s1, s2);
+        if (highScoreManager.isNewHighScore(maxScore) && maxScore > 0) {
+            buffer << "  |                                 |\n";
+            buffer << "  |     *** NEW HIGH SCORE! ***     |\n";
+        }
+        
+        buffer << "  |                                 |\n";
+        buffer << "  |   Press R to Replay             |\n";
+        buffer << "  |   Press Q to Quit               |\n";
+        buffer << "  +=================================+\n";
         
         int messageRow = headerRows + state->rows + 3;
         terminal.setCursorPosition(messageRow, 0);
@@ -478,10 +485,10 @@ public:
         if (key == -32 || key == 0) {
             key = terminal.getch();
             switch(key) {
-                case 72: game.setDirection(SnakeGameLogic::getDirectionUp()); break;
-                case 80: game.setDirection(SnakeGameLogic::getDirectionDown()); break;
-                case 75: game.setDirection(SnakeGameLogic::getDirectionLeft()); break;
-                case 77: game.setDirection(SnakeGameLogic::getDirectionRight()); break;
+                case 72: game.setDirection(1, SnakeGameLogic::getDirectionUp()); break;
+                case 80: game.setDirection(1, SnakeGameLogic::getDirectionDown()); break;
+                case 75: game.setDirection(1, SnakeGameLogic::getDirectionLeft()); break;
+                case 77: game.setDirection(1, SnakeGameLogic::getDirectionRight()); break;
             }
             return 0;
         }
@@ -500,10 +507,10 @@ public:
             
             if (bufferPos >= 3 && buffer[0] == 27 && buffer[1] == '[') {
                 switch(buffer[2]) {
-                    case 'A': game.setDirection(SnakeGameLogic::getDirectionUp()); break;
-                    case 'B': game.setDirection(SnakeGameLogic::getDirectionDown()); break;
-                    case 'C': game.setDirection(SnakeGameLogic::getDirectionRight()); break;
-                    case 'D': game.setDirection(SnakeGameLogic::getDirectionLeft()); break;
+                    case 'A': game.setDirection(1, SnakeGameLogic::getDirectionUp()); break;
+                    case 'B': game.setDirection(1, SnakeGameLogic::getDirectionDown()); break;
+                    case 'C': game.setDirection(1, SnakeGameLogic::getDirectionRight()); break;
+                    case 'D': game.setDirection(1, SnakeGameLogic::getDirectionLeft()); break;
                 }
             }
             
@@ -515,16 +522,16 @@ public:
         
         switch(key) {
             case 'w': case 'W':
-                game.setDirection(SnakeGameLogic::getDirectionUp());
+                game.setDirection(0, SnakeGameLogic::getDirectionUp());
                 return 0;
             case 's': case 'S':
-                game.setDirection(SnakeGameLogic::getDirectionDown());
+                game.setDirection(0, SnakeGameLogic::getDirectionDown());
                 return 0;
             case 'a': case 'A':
-                game.setDirection(SnakeGameLogic::getDirectionLeft());
+                game.setDirection(0, SnakeGameLogic::getDirectionLeft());
                 return 0;
             case 'd': case 'D':
-                game.setDirection(SnakeGameLogic::getDirectionRight());
+                game.setDirection(0, SnakeGameLogic::getDirectionRight());
                 return 0;
             case 'q': case 'Q':
                 return 'Q';
@@ -555,13 +562,14 @@ private:
     HighScoreManager& highScoreManager;
     GameRenderer renderer;
     int currentUpdateDelay;
-    int lastScore;
+    int lastScore1;
+    int lastScore2;
     
 public:
     GameSession(TerminalController& term, HighScoreManager& hsm, const GameConfig& cfg)
         : config(cfg), terminal(term), highScoreManager(hsm),
           renderer(term, hsm, config), currentUpdateDelay(cfg.updateDelay),
-          lastScore(0) {
+          lastScore1(0), lastScore2(0) {
         
         highScoreManager.setEventManager(&eventManager);
     }
@@ -616,12 +624,17 @@ public:
             if (elapsed >= currentUpdateDelay) {
                 gameActive = game.update();
                 
-                // Check for score changes and notify
                 auto state = game.getGameState();
-                int currentScore = !state->players.empty() ? state->players[0].score : 0;
-                if (currentScore != lastScore) {
-                    eventManager.notify(GameEvent(EventType::SCORE_CHANGED, currentScore));
-                    lastScore = currentScore;
+                int s1 = state->players.size() > 0 ? state->players[0].score : 0;
+                int s2 = state->players.size() > 1 ? state->players[1].score : 0;
+                
+                if (s1 != lastScore1) {
+                    eventManager.notify(GameEvent(EventType::SCORE_CHANGED, s1));
+                    lastScore1 = s1;
+                }
+                if (s2 != lastScore2) {
+                    eventManager.notify(GameEvent(EventType::SCORE_CHANGED, s2));
+                    lastScore2 = s2;
                 }
                 
                 renderer.updateGameBoard(game);
@@ -633,8 +646,9 @@ public:
         
         // Game over
         auto state = game.getGameState();
-        int finalScore = !state->players.empty() ? state->players[0].score : 0;
-        highScoreManager.checkAndSaveHighScore(finalScore);
+        int s1 = state->players.size() > 0 ? state->players[0].score : 0;
+        int s2 = state->players.size() > 1 ? state->players[1].score : 0;
+        highScoreManager.checkAndSaveHighScore(max(s1, s2));
         renderer.showGameOver(game);
         
         // Wait for user input
@@ -681,7 +695,7 @@ public:
         terminal.clearScreen();
         terminal.showCursor();
         ostringstream exitBuffer;
-        exitBuffer << "\n  Thanks for playing!\n\n";
+        exitBuffer << "\n  Thanks for playing Multiplayer Snake!\n\n";
         cout << exitBuffer.str();
         cout.flush();
     }
