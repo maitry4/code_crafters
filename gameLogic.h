@@ -249,7 +249,31 @@ public:
 // ============================================================================
 // FOOD MANAGEMENT
 // ============================================================================
+class FoodPositionProvider {
+public:
+    virtual ~FoodPositionProvider() = default;
 
+    virtual pair<int, int> choosePosition(
+        const vector<pair<int, int>>& emptyCells) = 0;
+};
+
+class RandomFoodPositionProvider : public FoodPositionProvider {
+private:
+    mt19937& rng;
+
+public:
+    explicit RandomFoodPositionProvider(mt19937& rng) : rng(rng) {}
+
+    pair<int, int> choosePosition(
+        const vector<pair<int, int>>& emptyCells) override {
+        
+        uniform_int_distribution<int> dist(
+            0, static_cast<int>(emptyCells.size()) - 1
+        );
+
+        return emptyCells[dist(rng)];
+    }
+};
 /**
  * @brief Manages food placement and state on the game board.
  * 
@@ -260,14 +284,23 @@ class FoodManager {
 private:
     pair<int, int> position;
     bool exists;
-    mt19937& rng;
+    RandomFoodPositionProvider randomProvider;
+    FoodPositionProvider& positionProvider;
 
 public:
     /**
      * @brief Constructs a food manager with a random number generator.
      * @param rng Reference to random number generator
      */
-    FoodManager(mt19937& rng) : exists(false), rng(rng) {}
+
+    FoodManager(mt19937& rng)
+    : exists(false),
+      randomProvider(rng),
+      positionProvider(randomProvider) {}
+    FoodManager(FoodPositionProvider& provider)
+    : exists(false),
+      randomProvider(*(mt19937*)nullptr),
+      positionProvider(provider) {}
 
     /**
      * @brief Places food at a random empty location on the board.
@@ -281,9 +314,7 @@ public:
             return;
         }
         
-        uniform_int_distribution<int> dist(0, emptyCells.size() - 1);
-        int idx = dist(rng);
-        position = emptyCells[idx];
+        position = positionProvider.choosePosition(emptyCells);
         board.setCellType(position.first, position.second, FOOD);
         exists = true;
     }
@@ -506,16 +537,38 @@ private:
     StatePublisher statePublisher;
     
     mt19937 rng;
+    RandomFoodPositionProvider randomFoodPositionProvider;
+    FoodPositionProvider& foodPositionProvider;
+
     int score;
     int pointsPerFood;
     bool gameOver;
 
 public:
-    SnakeGameLogic() : foodManager(rng), score(0), pointsPerFood(10), gameOver(false) {
+    SnakeGameLogic()
+    : randomFoodPositionProvider(rng),
+      foodPositionProvider(randomFoodPositionProvider),
+      foodManager(foodPositionProvider),
+      score(0),
+      pointsPerFood(10),
+      gameOver(false) {
         auto seed = chrono::high_resolution_clock::now().time_since_epoch().count();
         rng.seed(static_cast<unsigned int>(seed));
     }
+    explicit SnakeGameLogic(FoodPositionProvider& provider)
+        : randomFoodPositionProvider(rng),
+        foodPositionProvider(provider),
+        foodManager(foodPositionProvider),
+        score(0),
+        pointsPerFood(10),
+        gameOver(false) {
+        
+        auto seed = chrono::high_resolution_clock::now()
+            .time_since_epoch()
+            .count();
 
+        rng.seed(static_cast<unsigned int>(seed));
+    }
     /**
      * @brief Initializes the game with specified parameters.
      * @param rows Number of board rows
